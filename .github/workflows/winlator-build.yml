@@ -36,6 +36,9 @@ jobs:
           # Enable dependency autoresolver to catch any missed deps
           sed -i 's/_nomakepkg_dependency_autoresolver="false"/_nomakepkg_dependency_autoresolver="true"/' proton-tkg.cfg
           
+          # Prevent auto-install to ~/.steam/root/compatibilitytools.d as it might fail or be hard to find
+          sed -i 's/_no_autoinstall="false"/_no_autoinstall="true"/' proton-tkg.cfg
+
           # Ensure we don't get stuck on prompts
           # _LOCAL_PRESET set should avoid the main prompt.
           # We will also use 'yes' in the build step.
@@ -56,14 +59,15 @@ jobs:
           echo "Packaging..."
           mkdir -p winlator_package
           
-          # Find the latest build folder in compatibilitytools.d
-          # proton-tkg installs there by default
-          BUILD_DIR=$(find ~/.steam/root/compatibilitytools.d -maxdepth 1 -type d -name "proton_tkg_*" | sort | tail -n 1)
+          # Find the latest build folder
+          # With _no_autoinstall="true", it should be in a local directory, often 'built' or similar inside proton-tkg
+          
+          # Check for build in likely locations
+          BUILD_DIR=$(find proton-tkg -maxdepth 2 -type d -name "proton_tkg_*" | sort | tail -n 1)
           
           if [ -z "$BUILD_DIR" ]; then
-            echo "Build directory not found in ~/.steam/root/compatibilitytools.d!"
-            # Fallback check: sometimes it might be in 'built' dir if install failed or was disabled
-            BUILD_DIR=$(find proton-tkg -type d -name "proton_tkg_*" | sort | tail -n 1)
+             # Fallback: check standard steam install path just in case
+             BUILD_DIR=$(find ~/.steam/root/compatibilitytools.d -maxdepth 1 -type d -name "proton_tkg_*" | sort | tail -n 1)
           fi
           
           if [ -z "$BUILD_DIR" ]; then
