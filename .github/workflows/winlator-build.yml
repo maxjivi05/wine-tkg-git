@@ -33,57 +33,67 @@ jobs:
           # Use the 'valve-exp-bleeding' preset for bleeding edge
           sed -i 's/_LOCAL_PRESET=""/_LOCAL_PRESET="valve-exp-bleeding"/' proton-tkg.cfg
           
-          # Enable dependency autoresolver to catch any missed deps
-          sed -i 's/_nomakepkg_dependency_autoresolver="false"/_nomakepkg_dependency_autoresolver="true"/' proton-tkg.cfg
+          # Match official workflow configuration
+          sed -i 's/uninstaller="false"/uninstaller="true"/' proton-tkg.cfg
+          sed -i 's/autoinstall="false"/autoinstall="true"/' proton-tkg.cfg
+          sed -i 's/_no_container="true"/_no_container="false"/' proton-tkg.sh
           
-          # Prevent auto-install to ~/.steam/root/compatibilitytools.d as it might fail or be hard to find
-          sed -i 's/_no_autoinstall="false"/_no_autoinstall="true"/' proton-tkg.cfg
-
-          # Ensure we don't get stuck on prompts
-          # _LOCAL_PRESET set should avoid the main prompt.
-          # We will also use 'yes' in the build step.
+          # Set CI build flag
+          echo '_ci_build="true"' >> proton-tkg.cfg
+          
+          # Request tarball creation
+          touch tarplz
+          
+          # Ensure script is executable
+          chmod +x proton-tkg.sh
+          
+          # Debug: Show config
+          cat proton-tkg.cfg
 
       - name: Build Proton
         working-directory: proton-tkg
         run: |
-          # Create a dummy user config to avoid some prompts if they appear
+          # Create dummy user config to avoid prompts
           mkdir -p ~/.config/frogminer
           touch ~/.config/frogminer/proton-tkg.cfg
           
-          # Run the build script
-          # Using 'yes' to accept defaults for any remaining prompts
-          yes "" | ./proton-tkg.sh
+          # Run the build script with 'yes' to answer prompts
+          yes | ./proton-tkg.sh
 
       - name: Package for Winlator
         run: |
           echo "Packaging..."
           mkdir -p winlator_package
           
-          # Find the latest build folder
-          # With _no_autoinstall="true", it should be in a local directory, often 'built' or similar inside proton-tkg
+          # Find the built tarball in proton-tkg/built/
+          TARBALL=$(find proton-tkg/built -name "proton_tkg_*.tar" | sort | tail -n 1)
           
-          # Check for build in likely locations
-          BUILD_DIR=$(find proton-tkg -maxdepth 2 -type d -name "proton_tkg_*" | sort | tail -n 1)
-          
-          if [ -z "$BUILD_DIR" ]; then
-             # Fallback: check standard steam install path just in case
-             BUILD_DIR=$(find ~/.steam/root/compatibilitytools.d -maxdepth 1 -type d -name "proton_tkg_*" | sort | tail -n 1)
-          fi
-          
-          if [ -z "$BUILD_DIR" ]; then
-            echo "Build directory still not found. Listing potential locations:"
-            find proton-tkg -maxdepth 3
+          if [ -z "$TARBALL" ]; then
+            echo "Tarball not found in proton-tkg/built!"
+            ls -R proton-tkg
             exit 1
           fi
           
-          echo "Found build at: $BUILD_DIR"
+          echo "Found tarball at: $TARBALL"
           
-          # Copy contents to package dir
-          cp -r "$BUILD_DIR/"* winlator_package/
+          # Extract tarball to package dir
+          tar -xvf "$TARBALL" -C winlator_package
+          
+          # The tarball likely contains a top-level directory (e.g., proton_tkg_x.x). 
+          # Winlator .wcp usually expects the structure to be flat or have a specific root.
+          # Let's inspect what we extracted.
+          echo "Extracted contents:"
+          ls -F winlator_package
+          
+          # If extracted content is a single directory, move its contents up
+          if [ $(ls -1 winlator_package | wc -l) -eq 1 ] && [ -d "winlator_package/$(ls -1 winlator_package)" ]; then
+            SUBDIR=$(ls -1 winlator_package)
+            echo "Moving contents from $SUBDIR to root..."
+            mv winlator_package/"$SUBDIR"/* winlator_package/
+            rmdir winlator_package/"$SUBDIR"
+          fi
           
           # Create profile.json
-          # Minimal profile for Winlator.
-          # Note: The 'path' property is often '.' or similar.
           cat <<EOF > winlator_package/profile.json
           {
             "name": "Proton-Bleeding-Edge-TKG",
@@ -92,11 +102,7 @@ jobs:
           }
           EOF
           
-          # Create .wcp archive
-          # Structure: The archive root contains the files (bin/, lib/, profile.json, etc.)
-          # User instruction: "contents into a folder then you tar the folder then rename the folder in the tar to . then you zstd the tar"
-          # This is effectively archiving the contents with '.' as root.
-          
+          # Create .wcp archive (Zstd compressed tarball)
           cd winlator_package
           tar --zstd -cvf ../proton-bleeding-edge.wcp .
           cd ..
