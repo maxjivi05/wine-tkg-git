@@ -28,7 +28,7 @@ jobs:
             libsdl2-dev libvulkan-dev zstd tar git python3 python3-pip
 
       - name: Configure Proton-TKG
-        working-directory: wine-tkg-git/proton-tkg
+        working-directory: proton-tkg
         run: |
           # Use the 'valve-exp-bleeding' preset for bleeding edge
           sed -i 's/_LOCAL_PRESET=""/_LOCAL_PRESET="valve-exp-bleeding"/' proton-tkg.cfg
@@ -41,7 +41,7 @@ jobs:
           # We will also use 'yes' in the build step.
 
       - name: Build Proton
-        working-directory: wine-tkg-git/proton-tkg
+        working-directory: proton-tkg
         run: |
           # Create a dummy user config to avoid some prompts if they appear
           mkdir -p ~/.config/frogminer
@@ -63,12 +63,12 @@ jobs:
           if [ -z "$BUILD_DIR" ]; then
             echo "Build directory not found in ~/.steam/root/compatibilitytools.d!"
             # Fallback check: sometimes it might be in 'built' dir if install failed or was disabled
-            BUILD_DIR=$(find wine-tkg-git/proton-tkg -type d -name "proton_tkg_*" | sort | tail -n 1)
+            BUILD_DIR=$(find proton-tkg -type d -name "proton_tkg_*" | sort | tail -n 1)
           fi
           
           if [ -z "$BUILD_DIR" ]; then
             echo "Build directory still not found. Listing potential locations:"
-            find wine-tkg-git/proton-tkg -maxdepth 3
+            find proton-tkg -maxdepth 3
             exit 1
           fi
           
