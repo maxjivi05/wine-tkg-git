@@ -1,0 +1,106 @@
+name: Build Winlator Compatible Wine
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-multilib g++-multilib \
+            bison flex make pkg-config libasound2-dev libpulse-dev libdbus-1-dev \
+            libfontconfig1-dev libfreetype6-dev libgnutls28-dev libjpeg-dev \
+            libpng-dev libtiff-dev libx11-dev libxcomposite-dev libxcursor-dev \
+            libxext-dev libxi-dev libxrandr-dev libxrender-dev libxinerama-dev \
+            libxml2-dev libxslt1-dev libxt-dev libxv-dev libxxf86vm-dev \
+            libgl1-mesa-dev libglu1-mesa-dev libosmesa6-dev libudev-dev \
+            libsdl2-dev libvulkan-dev zstd tar git python3 python3-pip
+
+      - name: Configure Proton-TKG
+        working-directory: wine-tkg-git/proton-tkg
+        run: |
+          # Use the 'valve-exp-bleeding' preset for bleeding edge
+          sed -i 's/_LOCAL_PRESET=""/_LOCAL_PRESET="valve-exp-bleeding"/' proton-tkg.cfg
+          
+          # Enable dependency autoresolver to catch any missed deps
+          sed -i 's/_nomakepkg_dependency_autoresolver="false"/_nomakepkg_dependency_autoresolver="true"/' proton-tkg.cfg
+          
+          # Ensure we don't get stuck on prompts
+          # _LOCAL_PRESET set should avoid the main prompt.
+          # We will also use 'yes' in the build step.
+
+      - name: Build Proton
+        working-directory: wine-tkg-git/proton-tkg
+        run: |
+          # Create a dummy user config to avoid some prompts if they appear
+          mkdir -p ~/.config/frogminer
+          touch ~/.config/frogminer/proton-tkg.cfg
+          
+          # Run the build script
+          # Using 'yes' to accept defaults for any remaining prompts
+          yes "" | ./proton-tkg.sh
+
+      - name: Package for Winlator
+        run: |
+          echo "Packaging..."
+          mkdir -p winlator_package
+          
+          # Find the latest build folder in compatibilitytools.d
+          # proton-tkg installs there by default
+          BUILD_DIR=$(find ~/.steam/root/compatibilitytools.d -maxdepth 1 -type d -name "proton_tkg_*" | sort | tail -n 1)
+          
+          if [ -z "$BUILD_DIR" ]; then
+            echo "Build directory not found in ~/.steam/root/compatibilitytools.d!"
+            # Fallback check: sometimes it might be in 'built' dir if install failed or was disabled
+            BUILD_DIR=$(find wine-tkg-git/proton-tkg -type d -name "proton_tkg_*" | sort | tail -n 1)
+          fi
+          
+          if [ -z "$BUILD_DIR" ]; then
+            echo "Build directory still not found. Listing potential locations:"
+            find wine-tkg-git/proton-tkg -maxdepth 3
+            exit 1
+          fi
+          
+          echo "Found build at: $BUILD_DIR"
+          
+          # Copy contents to package dir
+          cp -r "$BUILD_DIR/"* winlator_package/
+          
+          # Create profile.json
+          # Minimal profile for Winlator.
+          # Note: The 'path' property is often '.' or similar.
+          cat <<EOF > winlator_package/profile.json
+          {
+            "name": "Proton-Bleeding-Edge-TKG",
+            "type": "wine",
+            "path": "."
+          }
+          EOF
+          
+          # Create .wcp archive
+          # Structure: The archive root contains the files (bin/, lib/, profile.json, etc.)
+          # User instruction: "contents into a folder then you tar the folder then rename the folder in the tar to . then you zstd the tar"
+          # This is effectively archiving the contents with '.' as root.
+          
+          cd winlator_package
+          tar --zstd -cvf ../proton-bleeding-edge.wcp .
+          cd ..
+          
+          ls -lh proton-bleeding-edge.wcp
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: proton-bleeding-edge-wcp
+          path: proton-bleeding-edge.wcp
