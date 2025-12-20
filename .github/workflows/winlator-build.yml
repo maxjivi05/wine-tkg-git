@@ -9,90 +9,85 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm64
+    runs-on: ubuntu-latest
     steps:
       - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf /usr/lib/jvm
+        uses: LizardByte/actions-more-space@v1
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install Build Dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y git build-essential bison flex fontforge gettext \
-            libasound2-dev libpulse-dev libdbus-1-dev libfontconfig1-dev \
-            libgnutls28-dev libpng-dev libxml2-dev libxslt1-dev libxcursor-dev \
-            libxcomposite-dev libxi-dev libxinerama-dev libxrandr-dev \
-            libsdl2-dev libvulkan-dev libvkd3d-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            libudev-dev libusb-1.0-dev libv4l-dev libopenal-dev \
-            liblcms2-dev libcups2-dev libgphoto2-dev libsane-dev \
-            libkrb5-dev libldap2-dev samba-dev ocl-icd-opencl-dev \
-            libpcap-dev python3-pefile python3-tk fonttools \
-            ccache jq zstd xvfb
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Configure TkG for Aarch64
+      - name: Build in ARM64 Container
         run: |
-          # Configure proton-tkg
-          sed -i 's/_LOCAL_PRESET=""/_LOCAL_PRESET="valve-exp-bleeding"/' proton-tkg/proton-tkg.cfg
-          sed -i 's/_no_autoinstall="false"/_no_autoinstall="true"/' proton-tkg/proton-tkg.cfg
-          sed -i 's/_nomakepkg_dependency_autoresolver="true"/_nomakepkg_dependency_autoresolver="false"/' proton-tkg/proton-tkg.cfg
-          
-          # Configure advanced settings
-          # Note: We are on ARM64, so it's a native build, but we disable x86 support
-          echo '_NOLIB32="true"' >> proton-tkg/proton-tkg-profiles/advanced-customization.cfg
-          echo '_NOINITIALPROMPT="true"' >> proton-tkg/proton-tkg-profiles/advanced-customization.cfg
-          
-          # Token for CI to pass variables to wine-tkg-git
-          echo "_ci_build='true'" > proton-tkg/proton_tkg_token
-          echo "_proton_tkg_path='${GITHUB_WORKSPACE}/proton-tkg'" >> proton-tkg/proton_tkg_token
-          echo "_standard_dlopen='true'" >> proton-tkg/proton_tkg_token
-          
-          # Request tarball generation
-          touch proton-tkg/tarplz
-
-      - name: Build Proton-TkG
-        working-directory: proton-tkg
-        run: |
-          # Answer 'yes' to any remaining prompts and run build
-          yes | ./proton-tkg.sh
-
-      - name: Repack for Winlator (.wcp)
-        run: |
-          mkdir -p repack
-          TARBALL=$(ls proton-tkg/built/*.tar | head -n 1)
-          if [ -z "$TARBALL" ]; then 
-            echo "Build failed, no tarball found in proton-tkg/built/"
-            ls -R proton-tkg/built || true
-            exit 1
-          fi
-          
-          echo "Extracting $TARBALL..."
-          tar -xf "$TARBALL" -C repack/
-          
-          # TkG tarball has a top-level dir like proton_tkg_XXXX/
-          DIST_DIR=$(ls -d repack/proton_tkg_* | head -n 1)
-          
-          # Move files/bin, files/lib, files/share to root of repack
-          if [ -d "$DIST_DIR/files" ]; then
-            echo "Moving files from $DIST_DIR/files to root..."
-            mv "$DIST_DIR"/files/* repack/
-          else
-            echo "Moving files from $DIST_DIR to root..."
-            mv "$DIST_DIR"/* repack/
-          fi
-          rm -rf "$DIST_DIR"
-          
-          # Create profile.json
-          cat <<EOF > repack/profile.json
+          docker run --rm --privileged \
+            -v $(pwd):/work \
+            -w /work \
+            --platform linux/arm64 \
+            ubuntu:22.04 \
+            bash -c "
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y git build-essential bison flex fontforge gettext \
+                libasound2-dev libpulse-dev libdbus-1-dev libfontconfig1-dev \
+                libgnutls28-dev libpng-dev libxml2-dev libxslt1-dev libxcursor-dev \
+                libxcomposite-dev libxi-dev libxinerama-dev libxrandr-dev \
+                libsdl2-dev libvulkan-dev libvkd3d-dev \
+                libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+                libudev-dev libusb-1.0-dev libv4l-dev libopenal-dev \
+                liblcms2-dev libcups2-dev libgphoto2-dev libsane-dev \
+                libkrb5-dev libldap2-dev samba-dev ocl-icd-opencl-dev \
+                libpcap-dev python3-pefile python3-tk fonttools \
+                ccache jq zstd xvfb kmod xz-utils
+              
+              # TkG Configuration
+              # We use sed with double quotes escaped for bash -c
+              sed -i 's/_LOCAL_PRESET=""/_LOCAL_PRESET="valve-exp-bleeding"/' proton-tkg/proton-tkg.cfg
+              sed -i 's/_no_autoinstall="false"/_no_autoinstall="true"/' proton-tkg/proton-tkg.cfg
+              sed -i 's/_nomakepkg_dependency_autoresolver="true"/_nomakepkg_dependency_autoresolver="false"/' proton-tkg/proton-tkg.cfg
+              
+              echo '_NOLIB32="true"' >> proton-tkg/proton-tkg-profiles/advanced-customization.cfg
+              echo '_NOINITIALPROMPT="true"' >> proton-tkg/proton-tkg-profiles/advanced-customization.cfg
+              
+              echo "_ci_build='true'" > proton-tkg/proton_tkg_token
+              echo "_standard_dlopen='true'" >> proton-tkg/proton_tkg_token
+              
+              touch proton-tkg/tarplz
+              
+              # Build
+              cd proton-tkg
+              yes | ./proton-tkg.sh
+              
+              # Repack for Winlator
+              echo 'Repacking for Winlator...'
+              mkdir -p /work/repack
+              TARBALL=$(ls built/*.tar | head -n 1)
+              if [ -z "$TARBALL" ]; then 
+                echo 'Build failed, no tarball found'
+                exit 1
+              fi
+              
+              tar -xf "$TARBALL" -C /work/repack/
+              DIST_DIR=$(ls -d /work/repack/proton_tkg_* | head -n 1)
+              
+              # Move files to root
+              if [ -d "$DIST_DIR/files" ]; then
+                mv "$DIST_DIR"/files/* /work/repack/
+              else
+                mv "$DIST_DIR"/* /work/repack/
+              fi
+              rm -rf "$DIST_DIR"
+              
+              # Create profile.json
+              cat <<EOF > /work/repack/profile.json
           {
             "name": "Proton Bleeding Edge (TkG) Aarch64",
             "type": "wine",
@@ -100,49 +95,40 @@ jobs:
             "path": "."
           }
           EOF
-          
-          # Generate minimal prefix
-          echo "Generating minimal prefix..."
-          export WINEPREFIX=$(pwd)/repack/prefix_tmp
-          export PATH=$(pwd)/repack/bin:$PATH
-          
-          # Start Xvfb for headless wineboot
-          Xvfb :99 -screen 0 1024x768x16 &
-          export DISPLAY=:99
-          
-          # Run wineboot --init to create the prefix structure
-          wineboot --init || true
-          
-          # Wait a bit for wineboot to finish
-          sleep 5
-          
-          # Pack the generated prefix
-          if [ -d "repack/prefix_tmp" ]; then
-            cd repack/prefix_tmp
-            tar -cJf ../prefix.tar.xz .
-            cd ../..
-            rm -rf repack/prefix_tmp
-          else
-            echo "Warning: wineboot failed to create prefix, creating dummy structure..."
-            mkdir -p repack/prefix_dummy/drive_c
-            touch repack/prefix_dummy/user.reg
-            cd repack/prefix_dummy
-            tar -cJf ../prefix.tar.xz .
-            cd ../..
-            rm -rf repack/prefix_dummy
-          fi
-          
-          # Create final WCP (Zstd compressed tarball)
-          # Requirement: bin, lib, share, profile.json, prefix.tar.xz in root
-          cd repack
-          tar -cf - bin lib* share profile.json prefix.tar.xz | zstd -19 -o ../proton-tkg-bleeding-edge-aarch64.wcp
-          cd ..
-          
-          echo "Final package size:"
-          ls -lh proton-tkg-bleeding-edge-aarch64.wcp
+              
+              # Generate minimal prefix
+              echo 'Generating minimal prefix...'
+              export WINEPREFIX=/work/repack/prefix_tmp
+              export PATH=/work/repack/bin:$PATH
+              
+              Xvfb :99 -screen 0 1024x768x16 &
+              export DISPLAY=:99
+              
+              wineboot --init || true
+              sleep 10
+              
+              if [ -d "/work/repack/prefix_tmp" ]; then
+                cd /work/repack/prefix_tmp
+                tar -cJf ../prefix.tar.xz .
+                cd /work
+                rm -rf /work/repack/prefix_tmp
+              else
+                echo 'Warning: wineboot failed, creating dummy prefix'
+                mkdir -p /work/repack/prefix_dummy/drive_c
+                cd /work/repack/prefix_dummy
+                tar -cJf ../prefix.tar.xz .
+                cd /work
+                rm -rf /work/repack/prefix_dummy
+              fi
+              
+              # Create final WCP
+              cd /work/repack
+              tar -cf - bin lib* share profile.json prefix.tar.xz | zstd -19 -o /work/proton-tkg-bleeding-edge-aarch64.wcp
+              echo 'Final repack complete'
+            "
 
-      - name: Upload WCP
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proton-tkg-bleeding-edge-aarch64
+          name: proton-tkg-winlator-aarch64
           path: proton-tkg-bleeding-edge-aarch64.wcp
