@@ -1,123 +1,148 @@
-name: Build Winlator Compatible Wine
+name: Build Winlator Proton Aarch64
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - master
       - main
+      - master
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm64
     steps:
       - name: Free Disk Space
-        uses: LizardByte/actions/actions/more_space@master
-        with:
-          analyze-space-savings: true
-          clean-all: true
-          safe-packages: "patch,git"
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf /usr/lib/jvm
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Install Dependencies
+      - name: Install Build Dependencies
         run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y build-essential gcc-multilib g++-multilib \
-            bison flex make pkg-config libasound2-dev libpulse-dev libdbus-1-dev \
-            libfontconfig1-dev libfreetype6-dev libgnutls28-dev libjpeg-dev \
-            libpng-dev libtiff-dev libx11-dev libxcomposite-dev libxcursor-dev \
-            libxext-dev libxi-dev libxrandr-dev libxrender-dev libxinerama-dev \
-            libxml2-dev libxslt1-dev libxt-dev libxv-dev libxxf86vm-dev \
-            libgl1-mesa-dev libglu1-mesa-dev libosmesa6-dev libudev-dev \
-            libsdl2-dev libvulkan-dev zstd tar git python3 python3-pip
+          sudo apt update
+          sudo apt install -y git build-essential bison flex fontforge gettext \
+            libasound2-dev libpulse-dev libdbus-1-dev libfontconfig1-dev \
+            libgnutls28-dev libpng-dev libxml2-dev libxslt1-dev libxcursor-dev \
+            libxcomposite-dev libxi-dev libxinerama-dev libxrandr-dev \
+            libsdl2-dev libvulkan-dev libvkd3d-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libudev-dev libusb-1.0-dev libv4l-dev libopenal-dev \
+            liblcms2-dev libcups2-dev libgphoto2-dev libsane-dev \
+            libkrb5-dev libldap2-dev samba-dev ocl-icd-opencl-dev \
+            libpcap-dev python3-pefile python3-tk fonttools \
+            ccache jq zstd xvfb
 
-      - name: Configure Proton-TKG
+      - name: Configure TkG for Aarch64
+        run: |
+          # Configure proton-tkg
+          sed -i 's/_LOCAL_PRESET=""/_LOCAL_PRESET="valve-exp-bleeding"/' proton-tkg/proton-tkg.cfg
+          sed -i 's/_no_autoinstall="false"/_no_autoinstall="true"/' proton-tkg/proton-tkg.cfg
+          sed -i 's/_nomakepkg_dependency_autoresolver="true"/_nomakepkg_dependency_autoresolver="false"/' proton-tkg/proton-tkg.cfg
+          
+          # Configure advanced settings
+          # Note: We are on ARM64, so it's a native build, but we disable x86 support
+          echo '_NOLIB32="true"' >> proton-tkg/proton-tkg-profiles/advanced-customization.cfg
+          echo '_NOINITIALPROMPT="true"' >> proton-tkg/proton-tkg-profiles/advanced-customization.cfg
+          
+          # Token for CI to pass variables to wine-tkg-git
+          echo "_ci_build='true'" > proton-tkg/proton_tkg_token
+          echo "_proton_tkg_path='${GITHUB_WORKSPACE}/proton-tkg'" >> proton-tkg/proton_tkg_token
+          echo "_standard_dlopen='true'" >> proton-tkg/proton_tkg_token
+          
+          # Request tarball generation
+          touch proton-tkg/tarplz
+
+      - name: Build Proton-TkG
         working-directory: proton-tkg
         run: |
-          # Use the 'valve-exp-bleeding' preset for bleeding edge
-          sed -i 's/_LOCAL_PRESET=""/_LOCAL_PRESET="valve-exp-bleeding"/' proton-tkg.cfg
-          
-          # Match official workflow configuration
-          sed -i 's/uninstaller="false"/uninstaller="true"/' proton-tkg.cfg
-          sed -i 's/autoinstall="false"/autoinstall="true"/' proton-tkg.cfg
-          sed -i 's/_no_container="true"/_no_container="false"/' proton-tkg.sh
-          
-          # Set CI build flag
-          echo '_ci_build="true"' >> proton-tkg.cfg
-          
-          # Request tarball creation
-          touch tarplz
-          
-          # Ensure script is executable
-          chmod +x proton-tkg.sh
-          
-          # Debug: Show config
-          cat proton-tkg.cfg
-
-      - name: Build Proton
-        working-directory: proton-tkg
-        run: |
-          # Create dummy user config to avoid prompts
-          mkdir -p ~/.config/frogminer
-          touch ~/.config/frogminer/proton-tkg.cfg
-          
-          # Run the build script with 'yes' to answer prompts
+          # Answer 'yes' to any remaining prompts and run build
           yes | ./proton-tkg.sh
 
-      - name: Package for Winlator
+      - name: Repack for Winlator (.wcp)
         run: |
-          echo "Packaging..."
-          mkdir -p winlator_package
-          
-          # Find the built tarball in proton-tkg/built/
-          TARBALL=$(find proton-tkg/built -name "proton_tkg_*.tar" | sort | tail -n 1)
-          
-          if [ -z "$TARBALL" ]; then
-            echo "Tarball not found in proton-tkg/built!"
-            ls -R proton-tkg
+          mkdir -p repack
+          TARBALL=$(ls proton-tkg/built/*.tar | head -n 1)
+          if [ -z "$TARBALL" ]; then 
+            echo "Build failed, no tarball found in proton-tkg/built/"
+            ls -R proton-tkg/built || true
             exit 1
           fi
           
-          echo "Found tarball at: $TARBALL"
+          echo "Extracting $TARBALL..."
+          tar -xf "$TARBALL" -C repack/
           
-          # Extract tarball to package dir
-          tar -xvf "$TARBALL" -C winlator_package
+          # TkG tarball has a top-level dir like proton_tkg_XXXX/
+          DIST_DIR=$(ls -d repack/proton_tkg_* | head -n 1)
           
-          # The tarball likely contains a top-level directory (e.g., proton_tkg_x.x). 
-          # Winlator .wcp usually expects the structure to be flat or have a specific root.
-          # Let's inspect what we extracted.
-          echo "Extracted contents:"
-          ls -F winlator_package
-          
-          # If extracted content is a single directory, move its contents up
-          if [ $(ls -1 winlator_package | wc -l) -eq 1 ] && [ -d "winlator_package/$(ls -1 winlator_package)" ]; then
-            SUBDIR=$(ls -1 winlator_package)
-            echo "Moving contents from $SUBDIR to root..."
-            mv winlator_package/"$SUBDIR"/* winlator_package/
-            rmdir winlator_package/"$SUBDIR"
+          # Move files/bin, files/lib, files/share to root of repack
+          if [ -d "$DIST_DIR/files" ]; then
+            echo "Moving files from $DIST_DIR/files to root..."
+            mv "$DIST_DIR"/files/* repack/
+          else
+            echo "Moving files from $DIST_DIR to root..."
+            mv "$DIST_DIR"/* repack/
           fi
+          rm -rf "$DIST_DIR"
           
           # Create profile.json
-          cat <<EOF > winlator_package/profile.json
+          cat <<EOF > repack/profile.json
           {
-            "name": "Proton-Bleeding-Edge-TKG",
+            "name": "Proton Bleeding Edge (TkG) Aarch64",
             "type": "wine",
+            "version": "bleeding-edge",
             "path": "."
           }
           EOF
           
-          # Create .wcp archive (Zstd compressed tarball)
-          cd winlator_package
-          tar --zstd -cvf ../proton-bleeding-edge.wcp .
+          # Generate minimal prefix
+          echo "Generating minimal prefix..."
+          export WINEPREFIX=$(pwd)/repack/prefix_tmp
+          export PATH=$(pwd)/repack/bin:$PATH
+          
+          # Start Xvfb for headless wineboot
+          Xvfb :99 -screen 0 1024x768x16 &
+          export DISPLAY=:99
+          
+          # Run wineboot --init to create the prefix structure
+          wineboot --init || true
+          
+          # Wait a bit for wineboot to finish
+          sleep 5
+          
+          # Pack the generated prefix
+          if [ -d "repack/prefix_tmp" ]; then
+            cd repack/prefix_tmp
+            tar -cJf ../prefix.tar.xz .
+            cd ../..
+            rm -rf repack/prefix_tmp
+          else
+            echo "Warning: wineboot failed to create prefix, creating dummy structure..."
+            mkdir -p repack/prefix_dummy/drive_c
+            touch repack/prefix_dummy/user.reg
+            cd repack/prefix_dummy
+            tar -cJf ../prefix.tar.xz .
+            cd ../..
+            rm -rf repack/prefix_dummy
+          fi
+          
+          # Create final WCP (Zstd compressed tarball)
+          # Requirement: bin, lib, share, profile.json, prefix.tar.xz in root
+          cd repack
+          tar -cf - bin lib* share profile.json prefix.tar.xz | zstd -19 -o ../proton-tkg-bleeding-edge-aarch64.wcp
           cd ..
           
-          ls -lh proton-bleeding-edge.wcp
+          echo "Final package size:"
+          ls -lh proton-tkg-bleeding-edge-aarch64.wcp
 
-      - name: Upload Artifact
+      - name: Upload WCP
         uses: actions/upload-artifact@v4
         with:
-          name: proton-bleeding-edge-wcp
-          path: proton-bleeding-edge.wcp
+          name: proton-tkg-bleeding-edge-aarch64
+          path: proton-tkg-bleeding-edge-aarch64.wcp
