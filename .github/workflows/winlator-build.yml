@@ -11,12 +11,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Free Disk Space
-        uses: LizardByte/actions-more-space@v1
-        with:
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
+      - name: Free Disk Space (Manual)
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf /usr/lib/jvm
+          sudo apt-get clean
+          df -h
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,7 +52,6 @@ jobs:
                 ccache jq zstd xvfb kmod xz-utils
               
               # TkG Configuration
-              # We use sed with double quotes escaped for bash -c
               sed -i 's/_LOCAL_PRESET=""/_LOCAL_PRESET="valve-exp-bleeding"/' proton-tkg/proton-tkg.cfg
               sed -i 's/_no_autoinstall="false"/_no_autoinstall="true"/' proton-tkg/proton-tkg.cfg
               sed -i 's/_nomakepkg_dependency_autoresolver="true"/_nomakepkg_dependency_autoresolver="false"/' proton-tkg/proton-tkg.cfg
